@@ -1,11 +1,12 @@
 # backend.py
 from fastapi import FastAPI, WebSocket
 from fastrtc import Stream
-import logging
+from logger import getLogger
 import uvicorn
 import json
 
 app = FastAPI()
+logger = getLogger("backend")
 
 # Create a bidirectional video stream (no processing)
 stream = Stream(
@@ -34,6 +35,7 @@ async def signaling(websocket: WebSocket, room_id: str):
         while True:
             data = await websocket.receive_text()
             msg = json.loads(data)
+            logger.debug(f'msg: {msg}')
 
             if msg["type"] == "offer":
                 rooms[room_id]["offer"] = msg

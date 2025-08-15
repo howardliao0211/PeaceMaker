@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>FastRTC LAN Call</title>
+</head>
+<body>
+<h2>FastRTC 1-on-1 Call (LAN)</h2>
+<video id="local" autoplay playsinline muted></video>
+<video id="remote" autoplay playsinline></video>
+<input type="text" id="room" placeholder="Enter room name" />
+<button id="start">Start Call</button>
+<button id="join">Join Call</button>
+
+<script>
+let pc;
+let ws;
+
+async function createPeerConnection(roomId) {
+    ws = new WebSocket(`ws://10.5.25.237:8080/signal/${roomId}`);
+
+    pc = new RTCPeerConnection();
+
+    pc.ontrack = event => {
+        document.getElementById("remote").srcObject = event.streams[0];
+    };
+
+    const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById("local").srcObject = localStream;
+    localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+    pc.onicecandidate = event => {
+        if (event.candidate) {
+            ws.send(JSON.stringify({
+                type: "candidate",
+                candidate: event.candidate
+            }));
+        }
+    };
+
+    ws.onmessage = async msg => {
+        const data = JSON.parse(msg.data);
+
+        if (data.type === "offer") {
+            await pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+        } 
+        else if (data.type === "answer") {
+            await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+        } 
+        else if (data.type === "candidate") {
+            try {
+                await pc.addIceCandidate(data.candidate);
+            } catch (err) {
+                console.error("Error adding ICE candidate", err);
+            }
+        }
+    };
+}
+
+document.getElementById("start").onclick = async () => {
+    const roomId = document.getElementById("room").value;
+    await createPeerConnection(roomId);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.onopen = () => {
+        ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+    };
+};
+
+document.getElementById("join").onclick = async () => {
+    const roomId = document.getElementById("room").value;
+    await createPeerConnection(roomId);
+    ws.onopen = () => {
+        ws.send(JSON.stringify({ type: "get-offer" }));
+    };
+};
+</script>
+</body>
+</html>

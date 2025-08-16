@@ -41,8 +41,8 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
     def __init__(self) -> None:
         super().__init__(
             "mono",
-            output_sample_rate=48000,
-            input_sample_rate=48000,
+            output_sample_rate=24000,
+            input_sample_rate=24000,
         )
         # passthrough queues for AV
         self.audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=8)
@@ -62,6 +62,9 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
 
         # Background STT task for current utterance
         self._stt_task: Optional[asyncio.Task] = None
+
+        # pipeline for sentiment analysis
+        self.sentiment_analysis = pipeline("text-classification")
 
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
@@ -194,6 +197,12 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         except Exception as e:
             logger.error(f'[STT error: {e}]')
         logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
+        
+        if len(text.split()) > 3:
+            t0 = time.time()
+            result = await asyncio.to_thread(self.sentiment_analysis, [text])
+            logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
+
 
 handler = GeminiHandler()
 

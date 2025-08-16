@@ -200,7 +200,10 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         
         if len(text.split()) > 3:
             t0 = time.time()
-            result = await asyncio.to_thread(self.sentiment_analysis, [text])
+            try:
+                result = await asyncio.to_thread(self.sentiment_analysis, [text])
+            except Exception as e:
+                logger.error(f'[SA error: {e}]')
             logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
 
 

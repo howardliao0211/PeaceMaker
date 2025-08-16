@@ -1,4 +1,11 @@
-from fastrtc import Stream, AsyncAudioVideoStreamHandler, VideoEmitType, wait_for_item, ReplyOnPause
+from fastrtc import (
+    Stream,
+    AsyncAudioVideoStreamHandler,
+    VideoEmitType,
+    wait_for_item,
+    ReplyOnPause,
+    get_stt_model
+)
 from fastrtc.utils import AdditionalOutputs
 from transformers import pipeline
 from PIL import Image
@@ -27,8 +34,7 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         self.video_queue = asyncio.Queue()
         self.last_frame_time = 0
         self.quit = asyncio.Event()
-
-        self.speech2text = pipeline(model=AUDIO_PRETRAINED)
+        self.stt_model = get_stt_model()
 
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
@@ -46,10 +52,12 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
 
     async def receive(self, frame: tuple[int, np.ndarray]) -> None:
         # convert audio to text
-        sampling_rate, array = frame
-        self.audio_queue.put_nowait(array)
+        sampling_rate, audio = frame
+        self.audio_queue.put_nowait(audio)
 
         # text
+        # text = self.stt_model.stt(frame)
+        # logger.debug(f'text: {text}')
 
     async def emit(self):
         array = await wait_for_item(self.audio_queue)

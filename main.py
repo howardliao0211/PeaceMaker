@@ -1,4 +1,4 @@
-from fastrtc import Stream, AsyncAudioVideoStreamHandler, VideoEmitType, wait_for_item
+from fastrtc import Stream, AsyncAudioVideoStreamHandler, VideoEmitType, wait_for_item, ReplyOnPause
 from fastrtc.utils import AdditionalOutputs
 from transformers import pipeline
 from PIL import Image
@@ -48,6 +48,8 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         # convert audio to text
         sampling_rate, array = frame
         self.audio_queue.put_nowait(array)
+
+        # text
 
     async def emit(self):
         array = await wait_for_item(self.audio_queue)

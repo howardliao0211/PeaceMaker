@@ -22,10 +22,7 @@ import time
 import base64
 import asyncio
 import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from threading import Thread
+import aiohttp
 
 logger = getLogger("main")
 
@@ -72,17 +69,26 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         self.sentiment_analysis = pipeline("text-classification")
 
     def mute(self) -> None:
+        """Mute the audio input/output"""
+        logger.info("Audio muted")
+        # TODO: Implement actual audio muting logic
         pass
 
     def unmute(self) -> None:
+        """Unmute the audio input/output"""
+        logger.info("Audio unmuted")
+        # TODO: Implement actual audio unmuting logic
         pass
 
     def getChatSuggestion(self) -> list[str]:
-        return [
+        """Get chat topic suggestions"""
+        suggestions = [
             'about her feelings',
             'about the friend',
             'about the party'
         ]
+        logger.info(f"Chat suggestions requested: {suggestions}")
+        return suggestions
 
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
@@ -224,7 +230,6 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
                 
                 # Send to web server API
                 try:
-                    import aiohttp
                     async with aiohttp.ClientSession() as session:
                         async with session.post(
                             "http://localhost:8000/api/transcription",
@@ -257,7 +262,6 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
                     
                     # Send to web server API
                     try:
-                        import aiohttp
                         async with aiohttp.ClientSession() as session:
                             async with session.post(
                                 "http://localhost:8000/api/sentiment",
@@ -273,248 +277,13 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
 
-    # ---------------- New methods for frontend integration ----------------
-    
-    def mute(self) -> None:
-        """Mute the audio input/output"""
-        logger.info("Audio muted")
-        # TODO: Implement actual audio muting logic
-        pass
-
-    def unmute(self) -> None:
-        """Unmute the audio input/output"""
-        logger.info("Audio unmuted")
-        # TODO: Implement actual audio unmuting logic
-        pass
-
-    def getChatSuggestion(self) -> list[str]:
-        """Get chat topic suggestions"""
-        suggestions = [
-            'break up',
-            'go home',
-            'I wanna sleep'
-        ]
-        logger.info(f"Chat suggestions requested: {suggestions}")
-        return suggestions
-
-
-# WebSocket connection manager
-class WebSocketManager:
-    def __init__(self):
-        self.active_connections: list[WebSocket] = []
-        self.handlers: dict[str, GeminiHandler] = {}
-
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        
-        # Create a new handler for this session
-        handler = GeminiHandler()
-        self.handlers[session_id] = handler
-        
-        logger.info(f"WebSocket client connected: {session_id}")
-        await websocket.send_text(json.dumps({
-            "type": "connection",
-            "status": "connected",
-            "session_id": session_id
-        }))
-
-    def disconnect(self, websocket: WebSocket, session_id: str):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        
-        if session_id in self.handlers:
-            del self.handlers[session_id]
-        
-        logger.info(f"WebSocket client disconnected: {session_id}")
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                # Remove dead connections
-                self.active_connections.remove(connection)
-
-# Create FastAPI app for WebSocket support
-app = FastAPI(title="PeaceMaker with WebSocket")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Create handler and stream instances
+handler = GeminiHandler()
+stream = Stream(
+    handler=handler,
+    modality="audio-video",
+    mode="send-receive",
 )
-
-manager = WebSocketManager()
-
-# WebSocket endpoint
-@app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    await manager.connect(websocket, session_id)
-    
-    try:
-        while True:
-            # Receive message from client
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            logger.info(f"WebSocket received from {session_id}: {message}")
-            
-            # Handle different message types
-            if message["type"] == "ping":
-                await websocket.send_text(json.dumps({"type": "pong"}))
-            
-            elif message["type"] == "get_status":
-                await manager.send_personal_message(
-                    json.dumps({
-                        "type": "status",
-                        "connected": True,
-                        "session_id": session_id
-                    }),
-                    websocket
-                )
-            
-            elif message["type"] == "control":
-                control_data = message.get("data", {})
-                command = control_data.get("command")
-                
-                logger.info(f"WebSocket control command from {session_id}: {command}")
-                
-                if command == "start_recording":
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "control_response",
-                            "command": command,
-                            "status": "success",
-                            "message": "Recording started"
-                        }),
-                        websocket
-                    )
-                
-                elif command == "stop_recording":
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "control_response",
-                            "command": command,
-                            "status": "success",
-                            "message": "Recording stopped"
-                        }),
-                        websocket
-                    )
-            
-            elif message["type"] == "mute":
-                logger.info(f"WebSocket mute command from {session_id}")
-                # Call the mute function from GeminiHandler
-                handler = manager.handlers.get(session_id)
-                if handler:
-                    handler.mute()
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "mute_response",
-                            "status": "success",
-                            "message": "Audio muted"
-                        }),
-                        websocket
-                    )
-                else:
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "mute_response",
-                            "status": "error",
-                            "message": "No handler found for session"
-                        }),
-                        websocket
-                    )
-            
-            elif message["type"] == "unmute":
-                logger.info(f"WebSocket unmute command from {session_id}")
-                # Call the unmute function from GeminiHandler
-                handler = manager.handlers.get(session_id)
-                if handler:
-                    handler.unmute()
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "unmute_response",
-                            "status": "success",
-                            "message": "Audio unmuted"
-                        }),
-                        websocket
-                    )
-                else:
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "unmute_response",
-                            "status": "error",
-                            "message": "No handler found for session"
-                        }),
-                        websocket
-                    )
-            
-            elif message["type"] == "get_chat_suggestions":
-                logger.info(f"WebSocket get_chat_suggestions command from {session_id}")
-                # Call the getChatSuggestion function from GeminiHandler
-                handler = manager.handlers.get(session_id)
-                if handler:
-                    suggestions = handler.getChatSuggestion()
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "topic_suggestions",
-                            "status": "success",
-                            "data": suggestions
-                        }),
-                        websocket
-                    )
-                else:
-                    await manager.send_personal_message(
-                        json.dumps({
-                            "type": "topic_suggestions",
-                            "status": "error",
-                            "message": "No handler found for session"
-                        }),
-                        websocket
-                    )
-            
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        manager.disconnect(websocket, session_id)
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "PeaceMaker with WebSocket"}
-
-def run_websocket_server():
-    """Run the WebSocket server in a separate thread"""
-    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
-
-# Only start WebSocket server when this file is run directly
-if __name__ == "__main__":
-    # Start WebSocket server in background thread
-    websocket_thread = Thread(target=run_websocket_server, daemon=True)
-    websocket_thread.start()
-
-    handler = GeminiHandler()
-
-    stream = Stream(
-        handler=handler,
-        modality="audio-video",
-        mode="send-receive",
-    )
-else:
-    # When imported, just create the handler and stream without starting servers
-    handler = GeminiHandler()
-
-    stream = Stream(
-        handler=handler,
-        modality="audio-video",
-        mode="send-receive",
-    )
 
 # Only launch the Stream interface when this file is run directly
 if __name__ == "__main__":

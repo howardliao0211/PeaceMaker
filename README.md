@@ -53,14 +53,6 @@ cd ..
 ```
 
 ### 2. Start the Services
-
-**Option A: Automated Startup (Recommended)**
-```bash
-# Start all services with one command
-python start_peacemaker.py
-```
-
-**Option B: Manual Startup**
 ```bash
 # Terminal 1: Start the main AI backend
 python main.py

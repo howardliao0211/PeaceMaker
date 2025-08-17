@@ -4,22 +4,18 @@ from fastrtc import (
     VideoEmitType,
     wait_for_item,
     ReplyOnPause,
-    get_stt_model
+    get_stt_model,
+    WebRTC
 )
 from fastrtc.reply_on_pause import get_silero_model, ModelOptions  # type: ignore
 from fastrtc.utils import AdditionalOutputs
 from transformers import pipeline
-from PIL import Image
-from io import BytesIO
 from logger import getLogger
-import contextlib
-from typing import Tuple, Optional, Callable, Awaitable
+from typing import Tuple, Optional
 from dataclasses import dataclass
-import queue
-import torch
+import gradio as gr
 import numpy as np
 import time
-import base64
 import asyncio
 
 logger = getLogger("main")
@@ -66,6 +62,12 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         # pipeline for sentiment analysis
         self.sentiment_analysis = pipeline("text-classification")
 
+        # ---------- Only what the UI needs ----------
+        self.argue_score: float = 0.0              # [0..1]
+        self.last_sentiment: dict = {} # e.g. {"label":"NEGATIVE","score":0.92}
+        self.convo_history: list[str] = []
+        # -------------------------------------------
+
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
 
@@ -97,7 +99,7 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
 
     async def video_emit(self):
         frame = await self.video_queue.get()
-        return frame, AdditionalOutputs()
+        return frame, AdditionalOutputs(self.argue_score, self.last_sentiment, self.convo_history)
 
     # ---------------- AUDIO ----------------
 
@@ -169,7 +171,7 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         audio = np.asarray(audio)
         if audio.ndim > 1:
             audio = audio.reshape(-1)
-        return self.output_sample_rate, audio
+        return (self.output_sample_rate, audio), AdditionalOutputs(self.argue_score, self.last_sentiment, self.convo_history)
 
     # ---------------- helpers ----------------
 
@@ -191,28 +193,119 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         """
         Off-loop STT so streaming is never blocked.
         """
-        t0 = time.time()
         try:
             text = await asyncio.to_thread(self.stt_model.stt, (fs, utter_1xN))
         except Exception as e:
             logger.error(f'[STT error: {e}]')
-        logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
+        
+        self.convo_history.append(text)
         
         if len(text.split()) > 3:
-            t0 = time.time()
             try:
                 result = await asyncio.to_thread(self.sentiment_analysis, [text])
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
-            logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
+            
+            self.last_sentiment = result
+            lbl = str(self.last_sentiment.get("label", "")).upper()
+            sc  = float(self.last_sentiment.get("score", 0.0))
+            # Simple mapping: strong NEG drives the overlay, POS weakly affects it
+            self.argue_score = sc if "NEG" in lbl else sc * 0.3
+        else:
+            self.argue_score = float(max(0.0, self.argue_score - 0.05))
 
 
-handler = GeminiHandler()
+# ui.py
+import gradio as gr
+from typing import List
+
+def _overlay_html(alpha: float) -> str:
+    a = max(0.0, min(1.0, float(alpha or 0.0)))
+    return f"""
+    <div id="argue-tint"
+         style="position:fixed; inset:0; background:rgba(255,0,0,{a});
+                pointer-events:none; transition:background 500ms ease; z-index:9999;"></div>
+    """
+
+def update_screen_tint(argue_score: float) -> str:
+    return _overlay_html(argue_score)
+
+def render_history_md(history: List[str]) -> str:
+    if not history:
+        return "### 🗂️ Conversation History\n_No conversation yet._"
+    items = list(reversed(history[-50:]))  # newest first
+    safe = [str(t).replace("<", "&lt;").replace(">", "&gt;") for t in items]
+    return "### 🗂️ Conversation History\n" + "\n".join(f"- {t}" for t in safe)
+
+def get_chat_suggestions():
+    return [
+        "Acknowledge feelings before facts.",
+        "Summarize: “Here’s what I’m hearing…”",
+        "Ask one open question.",
+        "Offer a brief pause/reset.",
+    ]
 
 stream = Stream(
-    handler=handler,
+    handler=GeminiHandler(),
     modality="audio-video",
     mode="send-receive",
 )
 
-stream.ui.launch()
+CSS = """
+/* Keep sidebar fixed as you scroll */
+.sidebar { position: sticky; top: 12px; align-self: flex-start; }
+/* Make the A/V panel clearly visible height-wise */
+.webrtc-wrap { min-height: 420px; }
+"""
+
+with gr.Blocks(css=CSS) as demo:
+    gr.HTML("<h1 style='text-align:center'>PeaceMaker ⚡️</h1>")
+    overlay = gr.HTML(_overlay_html(0.0))
+
+    with gr.Row() as row:
+        # ===== Sidebar (history + suggestions) =====
+        with gr.Column(scale=1, min_width=320, elem_classes=["sidebar"]):
+            history_md = gr.Markdown(render_history_md([]))
+            suggestions = gr.JSON(label="Suggestions")
+            suggest_btn = gr.Button("Give Chat Suggestion", variant="primary")
+
+        # ===== Main Area (single audio-video WebRTC) =====
+        with gr.Column(scale=3):
+            webrtc = WebRTC(                  # NOTE: using gradio's class alias import if your fastrtc exposes it like this
+                label='Video',
+                modality="audio-video",
+                mode="send-receive",         # your build expects this spelling
+            )
+            sentiment = gr.JSON(label="Sentiment (latest)")
+
+        webrtc.stream(
+            GeminiHandler(),
+            inputs=[webrtc],     # loopback so the remote video/audio renders here
+            outputs=[webrtc],
+        )
+
+    # Hidden driver for the overlay alpha
+    argue_score_state = gr.Number(value=0.0, visible=False, precision=3)
+
+    # AdditionalOutputs -> (argue_score, last_sentiment, convo_history)
+    def fanout(score: float, sa: dict, hist: list[str]):
+        return score, sa, render_history_md(hist)
+
+    # Subscribe ON THE SAME av component
+    webrtc.on_additional_outputs(
+        fanout,
+        outputs=[argue_score_state, sentiment, history_md],
+        queue=False,
+        show_progress="hidden",
+    )
+
+    # Tint updates
+    argue_score_state.change(update_screen_tint, inputs=argue_score_state, outputs=overlay)
+
+    # Sidebar suggestions
+    suggest_btn.click(get_chat_suggestions, None, suggestions)
+
+stream.ui = demo
+
+if __name__ == "__main__":
+    stream.ui.launch(server_port=7860)

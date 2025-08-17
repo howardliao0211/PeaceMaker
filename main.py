@@ -260,6 +260,30 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
 
+    # ---------------- New methods for frontend integration ----------------
+    
+    def mute(self) -> None:
+        """Mute the audio input/output"""
+        logger.info("Audio muted")
+        # TODO: Implement actual audio muting logic
+        pass
+
+    def unmute(self) -> None:
+        """Unmute the audio input/output"""
+        logger.info("Audio unmuted")
+        # TODO: Implement actual audio unmuting logic
+        pass
+
+    def getChatSuggestion(self) -> list[str]:
+        """Get chat topic suggestions"""
+        suggestions = [
+            'break up',
+            'go home',
+            'I wanna sleep'
+        ]
+        logger.info(f"Chat suggestions requested: {suggestions}")
+        return suggestions
+
 
 # WebSocket connection manager
 class WebSocketManager:
@@ -365,6 +389,78 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                             "command": command,
                             "status": "success",
                             "message": "Recording stopped"
+                        }),
+                        websocket
+                    )
+            
+            elif message["type"] == "mute":
+                logger.info(f"WebSocket mute command from {session_id}")
+                # Call the mute function from GeminiHandler
+                handler = manager.handlers.get(session_id)
+                if handler:
+                    handler.mute()
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "mute_response",
+                            "status": "success",
+                            "message": "Audio muted"
+                        }),
+                        websocket
+                    )
+                else:
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "mute_response",
+                            "status": "error",
+                            "message": "No handler found for session"
+                        }),
+                        websocket
+                    )
+            
+            elif message["type"] == "unmute":
+                logger.info(f"WebSocket unmute command from {session_id}")
+                # Call the unmute function from GeminiHandler
+                handler = manager.handlers.get(session_id)
+                if handler:
+                    handler.unmute()
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "unmute_response",
+                            "status": "success",
+                            "message": "Audio unmuted"
+                        }),
+                        websocket
+                    )
+                else:
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "unmute_response",
+                            "status": "error",
+                            "message": "No handler found for session"
+                        }),
+                        websocket
+                    )
+            
+            elif message["type"] == "get_chat_suggestions":
+                logger.info(f"WebSocket get_chat_suggestions command from {session_id}")
+                # Call the getChatSuggestion function from GeminiHandler
+                handler = manager.handlers.get(session_id)
+                if handler:
+                    suggestions = handler.getChatSuggestion()
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "topic_suggestions",
+                            "status": "success",
+                            "data": suggestions
+                        }),
+                        websocket
+                    )
+                else:
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "topic_suggestions",
+                            "status": "error",
+                            "message": "No handler found for session"
                         }),
                         websocket
                     )

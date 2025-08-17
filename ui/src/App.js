@@ -13,6 +13,10 @@ function App() {
   const [websocketConnected, setWebsocketConnected] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   
+  // New state for mute functionality and topic suggestions
+  const [isMuted, setIsMuted] = useState(false);
+  const [topicSuggestions, setTopicSuggestions] = useState([]);
+  
   // WebSocket reference
   const websocketRef = useRef(null);
 
@@ -192,6 +196,36 @@ function App() {
         console.log('📊 Status received:', message);
         break;
         
+      case 'topic_suggestions':
+        // Handle topic suggestions from backend
+        if (message.data && Array.isArray(message.data)) {
+          setTopicSuggestions(message.data);
+        }
+        console.log('💡 Topic suggestions received:', message.data);
+        break;
+        
+      case 'mute_response':
+        // Handle mute response from backend
+        if (message.status === 'success') {
+          console.log('🔇 Mute response:', message.message);
+        } else {
+          console.error('❌ Mute failed:', message.message);
+          // Revert the mute state if it failed
+          setIsMuted(false);
+        }
+        break;
+        
+      case 'unmute_response':
+        // Handle unmute response from backend
+        if (message.status === 'success') {
+          console.log('🔊 Unmute response:', message.message);
+        } else {
+          console.error('❌ Unmute failed:', message.message);
+          // Revert the unmute state if it failed
+          setIsMuted(true);
+        }
+        break;
+        
       default:
         console.log('📨 WebSocket message received:', message);
     }
@@ -225,107 +259,31 @@ function App() {
     }
   };
 
-  const toggleRecording = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
-  };
-
-  const startRecording = async () => {
-    if (!gradioLoaded) {
-      alert('Please wait for the AI interface to load before starting recording');
-      return;
-    }
-    
-    console.log('🎙️ Starting recording...');
-    
+  const toggleMute = async () => {
     try {
-      // Send WebSocket message to start recording
-      sendWebSocketMessage('control', { command: 'start_recording' });
-      
-      // Also try to communicate with Gradio iframe
-      const gradioFrame = document.querySelector('iframe[src="/gradio-embed.html"]');
-      if (gradioFrame && gradioFrame.contentWindow) {
-        try {
-          // Try to post message to Gradio iframe
-          gradioFrame.contentWindow.postMessage({
-            type: 'start_recording',
-            timestamp: Date.now()
-          }, '*');
-        } catch (error) {
-          console.log('Could not communicate with Gradio iframe:', error);
-        }
-      }
-      
-      setIsRecording(true);
-      console.log('✅ Recording started successfully');
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-      alert('Failed to start recording. Please check the console for details.');
-    }
-  };
-
-  const stopRecording = async () => {
-    console.log('🛑 Stopping recording...');
-    
-    try {
-      // Send WebSocket message to stop recording
-      sendWebSocketMessage('control', { command: 'stop_recording' });
-      
-      // Also try to communicate with Gradio iframe
-      const gradioFrame = document.querySelector('iframe[src="/gradio-embed.html"]');
-      if (gradioFrame && gradioFrame.contentWindow) {
-        try {
-          // Try to post message to Gradio iframe
-          gradioFrame.contentWindow.postMessage({
-            type: 'stop_recording',
-            timestamp: Date.now()
-          }, '*');
-        } catch (error) {
-          console.log('Could not communicate with Gradio iframe:', error);
-        }
-      }
-      
-      setIsRecording(false);
-      console.log('✅ Recording stopped successfully');
-    } catch (error) {
-      console.error('Failed to stop recording:', error);
-      alert('Failed to stop recording. Please check the console for details.');
-    }
-  };
-
-  const toggleVideo = async () => {
-    try {
-      if (isVideoOn) {
-        setIsVideoOn(false);
-        console.log('📹 Video disabled');
+      if (isMuted) {
+        // Call unmute function
+        sendWebSocketMessage('unmute');
+        setIsMuted(false);
+        console.log('🔊 Unmuted');
       } else {
-        try {
-          await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: 640 },
-              height: { ideal: 480 },
-              facingMode: 'user'
-            },
-            audio: false
-          });
-          
-          setIsVideoOn(true);
-          console.log('📹 Video enabled');
-        } catch (error) {
-          alert('Failed to access camera');
-        }
+        // Call mute function
+        sendWebSocketMessage('mute');
+        setIsMuted(true);
+        console.log('🔇 Muted');
       }
     } catch (error) {
-      console.error('Video control error:', error);
+      console.error('Failed to toggle mute:', error);
     }
   };
 
-  const testConnection = () => {
-    console.log('Testing backend connection...');
-    testBackendConnection();
+  const getTopicSuggestions = async () => {
+    try {
+      sendWebSocketMessage('get_chat_suggestions');
+      console.log('💡 Requesting topic suggestions...');
+    } catch (error) {
+      console.error('Failed to get topic suggestions:', error);
+    }
   };
 
   return (
@@ -342,158 +300,166 @@ function App() {
               <div className="status-dot"></div>
               {gradioLoaded ? 'AI Ready' : 'AI Loading...'}
             </div>
-            <button className="btn btn-secondary" onClick={testConnection}>
-              <i className="fas fa-server"></i>
-            </button>
-            <button className="btn btn-secondary" onClick={() => console.log('Settings clicked')}>
-              <i className="fas fa-cog"></i>
-            </button>
-            <button className="btn btn-secondary" onClick={() => console.log('Help clicked')}>
-              <i className="fas fa-question-circle"></i>
-            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content - Window-based Layout */}
       <main className="main-content">
-        <div className="video-section">
-          {/* AI Interface Header */}
-          <div className="ai-interface-header">
-            <h2>🤖 PeaceMaker AI Interface</h2>
-            <p>Use the interface below for real-time transcription, sentiment analysis, and AI-powered conversation</p>
-            <div className="backend-status">
-              <span className={`status-dot ${gradioLoaded ? 'online' : 'offline'}`}></span>
-              <span>Backend Server: {gradioLoaded ? 'Running' : 'Starting...'}</span>
-              {!gradioLoaded && (
-                <small>Make sure to run <code>python main.py</code> in your terminal</small>
-              )}
-              {gradioLoaded && (
-                <small>Connected to Gradio interface on port 7860</small>
-              )}
-              <div style={{marginTop: '10px', fontSize: '12px', color: '#666'}}>
-                <strong>Note:</strong> If camera/microphone isn't working, restart your backend with the updated configuration
+        {/* AI Interface Window */}
+        <div className="ai-window">
+          <div className="window-content">
+            {/* Gradio Interface Container */}
+            <div className="gradio-container">
+              <div className="iframe-window">
+                {!gradioLoaded && !gradioError && (
+                  <div className="gradio-loading">
+                    <div className="loading-spinner"></div>
+                    <p>Loading AI Interface...</p>
+                  </div>
+                )}
+                
+                {gradioError && (
+                  <div className="gradio-error">
+                    <div className="error-icon">⚠️</div>
+                    <h3>Failed to Load AI Interface</h3>
+                    <p>{gradioError}</p>
+                    <button 
+                      className="btn btn-primary" 
+                      onClick={() => {
+                        setGradioError(null);
+                        setGradioLoaded(false);
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+                
+                <iframe
+                  src="/gradio-embed.html"
+                  title="PeaceMaker AI Interface"
+                  width="100%"
+                  height="100%"
+                  style={{
+                    border: 'none',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    display: gradioLoaded ? 'block' : 'none'
+                  }}
+                  allow="camera; microphone; geolocation; encrypted-media"
+                  allowFullScreen
+                  onLoad={() => {
+                    setGradioLoaded(true);
+                    console.log('✅ AI Interface loaded successfully');
+                  }}
+                  onError={() => setGradioError('Failed to load AI interface. Make sure the backend server is running on localhost:7860.')}
+                />
               </div>
             </div>
-          </div>
-          
-          {/* Gradio Interface Container */}
-          <div className="gradio-container">
-            {!gradioLoaded && !gradioError && (
-              <div className="gradio-loading">
-                <div className="loading-spinner"></div>
-                <p>Loading AI Interface...</p>
-              </div>
-            )}
             
-            {gradioError && (
-              <div className="gradio-error">
-                <div className="error-icon">⚠️</div>
-                <h3>Failed to Load AI Interface</h3>
-                <p>{gradioError}</p>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={() => {
-                    setGradioError(null);
-                    setGradioLoaded(false);
-                  }}
-                >
-                  Retry
+            {/* Live Transcript at Bottom */}
+            <div className="transcript-section">
+              <div className="transcript-header">
+                <h3>Live Transcript</h3>
+                <button className="expand-btn" title="Expand/Collapse">
+                  <i className="fas fa-chevron-down"></i>
                 </button>
               </div>
-            )}
-            
-            <iframe
-              src="/gradio-embed.html"
-              title="PeaceMaker AI Interface"
-              width="100%"
-              height="600"
-              style={{
-                border: 'none',
-                borderRadius: '8px',
-                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-                display: gradioLoaded ? 'block' : 'none'
-              }}
-              allow="camera; microphone; geolocation; encrypted-media"
-              allowFullScreen
-              onLoad={() => {
-                setGradioLoaded(true);
-                console.log('✅ AI Interface loaded successfully');
-              }}
-              onError={() => setGradioError('Failed to load AI interface. Make sure the backend server is running on localhost:7860.')}
-            />
-          </div>
-          
-          {/* Video Controls Overlay */}
-          <div className="video-controls">
-            {!gradioLoaded && (
-              <div className="controls-notice">
-                <i className="fas fa-info-circle"></i>
-                <span>AI Interface loading... Please wait</span>
+              <div className="transcript-content">
+                {websocketConnected ? (
+                  <div className="transcript-results">
+                    {transcripts.length > 0 ? (
+                      <div className="transcript-list">
+                        {transcripts.slice().reverse().map((transcript, index) => (
+                          <div key={transcript.id} className="transcript-item">
+                            <div className="transcript-text">
+                              {transcript.text}
+                            </div>
+                            <div className="transcript-meta">
+                              <span className="confidence">
+                                Confidence: {(transcript.confidence * 100).toFixed(1)}%
+                              </span>
+                              <span className="timestamp">
+                                {transcript.timestamp}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="transcript-placeholder">
+                        <i className="fas fa-microphone"></i>
+                        <p>Waiting for transcript...</p>
+                        <small>Start recording to see live transcription</small>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="transcript-placeholder">
+                    <i className="fas fa-wifi"></i>
+                    <p>Connecting to transcription service...</p>
+                    <small>WebSocket connection required</small>
+                  </div>
+                )}
               </div>
-            )}
-            
-            <div className="controls-buttons">
-              <button 
-                className={`control-btn ${isRecording ? 'recording' : ''}`}
-                onClick={toggleRecording}
-                disabled={!gradioLoaded}
-                title={!gradioLoaded ? 'Wait for AI interface to load' : 'Start/Stop recording'}
-              >
-                <i className={`fas ${isRecording ? 'fa-stop' : 'fa-microphone'}`}></i>
-              </button>
-              <button 
-                className={`control-btn ${isVideoOn ? 'active' : ''}`}
-                onClick={toggleVideo}
-                disabled={!gradioLoaded}
-                title={!gradioLoaded ? 'Wait for AI interface to load' : 'Toggle video'}
-              >
-                <i className={`fas ${isVideoOn ? 'fa-video' : 'fa-video-slash'}`}></i>
-              </button>
-              <button 
-                className="control-btn" 
-                onClick={() => console.log('Screen share clicked')}
-                disabled={!gradioLoaded}
-                title={!gradioLoaded ? 'Wait for AI interface to load' : 'Screen share'}
-              >
-                <i className="fas fa-desktop"></i>
-              </button>
-              <button 
-                className="control-btn" 
-                onClick={() => {
-                  setGradioLoaded(false);
-                  setGradioError(null);
-                }}
-                title="Refresh AI Interface"
-              >
-                <i className="fas fa-sync-alt"></i>
-              </button>
             </div>
           </div>
         </div>
 
         {/* Sidebar */}
         <div className="sidebar">
-          {/* Connection Status */}
-          <div className="status-card">
-            <h3>Connection Status</h3>
-            <div className="status-indicator">
-              <span className={`status-dot ${gradioLoaded ? 'online' : 'offline'}`}></span>
-              <span>AI Interface: {gradioLoaded ? 'Online' : 'Offline'}</span>
-            </div>
-            <div className="status-indicator">
-              <span className={`status-dot ${websocketConnected ? 'online' : 'offline'}`}></span>
-              <span>WebSocket: {websocketConnected ? 'Connected' : 'Disconnected'}</span>
-            </div>
-            <div className="status-indicator">
-              <span className={`status-dot ${isRecording ? 'online' : 'offline'}`}></span>
-              <span>Recording: {isRecording ? 'Active' : 'Inactive'}</span>
-            </div>
-            {currentSessionId && (
-              <div className="session-info">
-                <small>Session: {currentSessionId}</small>
+          {/* Cool Down Card */}
+          <div className="cooldown-card">
+            <h3>Cool Down</h3>
+            <div className="cooldown-controls">
+              <button 
+                className={`cooldown-btn ${isMuted ? 'muted' : ''}`}
+                onClick={toggleMute}
+                disabled={!websocketConnected}
+                title={!websocketConnected ? 'Wait for connection' : (isMuted ? 'Click to unmute' : 'Click to mute')}
+              >
+                <i className={`fas ${isMuted ? 'fa-microphone-slash' : 'fa-microphone'}`}></i>
+                <span>{isMuted ? 'Unmute' : 'Mute'}</span>
+              </button>
+              <div className="cooldown-status">
+                <span className={`status-dot ${isMuted ? 'offline' : 'online'}`}></span>
+                <span>Audio: {isMuted ? 'Muted' : 'Active'}</span>
               </div>
-            )}
+            </div>
+          </div>
+
+          {/* Topic Suggestions Card */}
+          <div className="suggestions-card">
+            <h3>Topic Suggestions</h3>
+            <div className="suggestions-content">
+              <button 
+                className="refresh-suggestions-btn"
+                onClick={getTopicSuggestions}
+                disabled={!websocketConnected}
+                title={!websocketConnected ? 'Wait for connection' : 'Get new topic suggestions'}
+              >
+                <i className="fas fa-lightbulb"></i>
+                <span>Get Suggestions</span>
+              </button>
+              
+              {topicSuggestions.length > 0 ? (
+                <div className="suggestions-list">
+                  {topicSuggestions.map((suggestion, index) => (
+                    <div key={index} className="suggestion-item">
+                      <i className="fas fa-comment"></i>
+                      <span>{suggestion}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="suggestions-placeholder">
+                  <i className="fas fa-lightbulb"></i>
+                  <p>No suggestions yet</p>
+                  <small>Click the button above to get topic suggestions</small>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Sentiment Analysis */}
@@ -538,46 +504,6 @@ function App() {
               )}
             </div>
           </div>
-
-          {/* Transcript Display */}
-          <div className="transcript-card">
-            <h3>Live Transcript</h3>
-            <div className="transcript-display">
-              {websocketConnected ? (
-                <div className="transcript-results">
-                  {transcripts.length > 0 ? (
-                    transcripts.map((transcript, index) => (
-                      <div key={transcript.id} className="transcript-item">
-                        <div className="transcript-text">
-                          {transcript.text}
-                        </div>
-                        <div className="transcript-meta">
-                          <span className="confidence">
-                            Confidence: {(transcript.confidence * 100).toFixed(1)}%
-                          </span>
-                          <span className="timestamp">
-                            {transcript.timestamp}
-                          </span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="transcript-placeholder">
-                      <i className="fas fa-microphone"></i>
-                      <p>Waiting for transcript...</p>
-                      <small>Start recording to see live transcription</small>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="transcript-placeholder">
-                  <i className="fas fa-wifi"></i>
-                  <p>Connecting to transcription service...</p>
-                  <small>WebSocket connection required</small>
-                </div>
-              )}
-            </div>
-          </div>
         </div>
       </main>
 
@@ -590,11 +516,6 @@ function App() {
             <span className={`status-indicator ${gradioLoaded ? 'online' : 'offline'}`}>
               AI: {gradioLoaded ? 'Ready' : 'Loading...'}
             </span>
-          </div>
-          <div className="footer-controls">
-            <button className="btn btn-danger" onClick={() => console.log('End call clicked')}>
-              <i className="fas fa-phone-slash"></i> End Call
-            </button>
           </div>
         </div>
       </footer>

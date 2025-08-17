@@ -335,17 +335,49 @@ def run_websocket_server():
     """Run the WebSocket server in a separate thread"""
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
-# Start WebSocket server in background thread
-websocket_thread = Thread(target=run_websocket_server, daemon=True)
-websocket_thread.start()
+# Only start WebSocket server when this file is run directly
+if __name__ == "__main__":
+    # Start WebSocket server in background thread
+    websocket_thread = Thread(target=run_websocket_server, daemon=True)
+    websocket_thread.start()
 
-handler = GeminiHandler()
+    handler = GeminiHandler()
 
-stream = Stream(
-    handler=handler,
-    modality="audio-video",
-    mode="send-receive",
-)
+    stream = Stream(
+        handler=handler,
+        modality="audio-video",
+        mode="send-receive",
+    )
+else:
+    # When imported, just create the handler and stream without starting servers
+    handler = GeminiHandler()
 
-# Launch the main Stream interface
-stream.ui.launch()
+    stream = Stream(
+        handler=handler,
+        modality="audio-video",
+        mode="send-receive",
+    )
+
+# Only launch the Stream interface when this file is run directly
+if __name__ == "__main__":
+    # Launch the main Stream interface with proper iframe and CORS settings
+    stream.ui.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        share=False,
+        show_error=True,
+        quiet=False,
+        favicon_path=None,
+        # Enable iframe embedding
+        inbrowser=False,
+        # Allow all origins for iframe embedding
+        root_path="",
+        # Custom CSS to fix iframe issues
+        css="""
+        .gradio-container {
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        """
+    )

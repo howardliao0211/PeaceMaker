@@ -39,8 +39,15 @@ app.add_middleware(
 
 # Mount static files (UI)
 ui_path = Path(__file__).parent / "ui"
-if ui_path.exists():
-    app.mount("/static", StaticFiles(directory=str(ui_path)), name="static")
+build_path = ui_path / "build"
+
+# Mount the React build directory as static files
+if build_path.exists():
+    # Mount static assets at root level for React app
+    app.mount("/", StaticFiles(directory=str(build_path), html=True), name="static")
+    logger.info(f"Mounted React build directory: {build_path}")
+else:
+    logger.warning(f"React build directory not found: {build_path}")
 
 # WebSocket connections
 class ConnectionManager:
@@ -104,14 +111,8 @@ class AudioSettings(BaseModel):
     noise_suppression: bool = True
 
 # Routes
-@app.get("/", response_class=HTMLResponse)
-async def get_ui():
-    """Serve the main UI"""
-    ui_file = ui_path / "index.html"
-    if ui_file.exists():
-        return FileResponse(ui_file)
-    else:
-        raise HTTPException(status_code=404, detail="UI files not found")
+# The React app is now served directly by StaticFiles mount
+# No need for custom route handler
 
 @app.get("/api/health")
 async def health_check():
@@ -452,5 +453,6 @@ def main():
         log_level="info"
     )
 
+# Only run main when script is executed directly
 if __name__ == "__main__":
     main()

@@ -11,10 +11,12 @@ from fastrtc.utils import AdditionalOutputs
 from transformers import pipeline
 from PIL import Image
 from io import BytesIO
+import logging
 from logger import getLogger
 import contextlib
 from typing import Tuple, Optional, Callable, Awaitable
 from dataclasses import dataclass
+from chat_suggestion import get_facilitator_suggestions
 import queue
 import torch
 import numpy as np
@@ -25,6 +27,7 @@ import json
 import aiohttp
 
 logger = getLogger("main")
+logger.setLevel(logging.DEBUG) # set to logging.CRITICAL in production/demo
 
 @dataclass
 class VadConfig:
@@ -68,27 +71,29 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         # pipeline for sentiment analysis
         self.sentiment_analysis = pipeline("text-classification")
 
+        # mute
+        self._is_muted = False
+
+        # State for generating chat suggestions
+        self.chat_queue: queue.Queue = queue.Queue(maxsize=8)
+
     def mute(self) -> None:
-        """Mute the audio input/output"""
-        logger.info("Audio muted")
-        # TODO: Implement actual audio muting logic
-        pass
+        self._is_muted = True
+        logger.info("Speaker Muted")
 
     def unmute(self) -> None:
-        """Unmute the audio input/output"""
-        logger.info("Audio unmuted")
-        # TODO: Implement actual audio unmuting logic
-        pass
+        self._is_muted = False
+        logger.info("Speaker Unmuted")
 
     def getChatSuggestion(self) -> list[str]:
-        """Get chat topic suggestions"""
-        suggestions = [
-            'about her feelings',
-            'about the friend',
-            'about the party'
-        ]
-        logger.info(f"Chat suggestions requested: {suggestions}")
-        return suggestions
+        
+        chats = []
+        while True:
+            try:
+                chats.append(self.chat_queue.get_nowait())
+            except queue.Empty:
+                break
+        return get_facilitator_suggestions(chats) if chats else []
 
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
@@ -126,6 +131,13 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
     # ---------------- AUDIO ----------------
 
     async def receive(self, frame: Tuple[int, np.ndarray]) -> None:
+        
+        # If the speaker is muted, then don't even bother to receive
+        # and process in-coming audio. The speaker will not have any sound
+        # and the handler will not run AI models. 
+        if self._is_muted:
+            return
+
         fs, audio = frame
 
         # 1) Pass through audio for playback (non-blocking; drop oldest if congested)
@@ -245,8 +257,18 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         except Exception as e:
             logger.error(f'[STT error: {e}]')
         
-        if len(text.split()) > 3:
+        if len(text.split()) >= 3:
             t0 = time.time()
+
+            try:
+                self.chat_queue.put_nowait(text)
+            except queue.Full:
+                try:
+                    _ = self.chat_queue.get_nowait()  # optional: drop oldest
+                    self.chat_queue.put_nowait(text)
+                except queue.Empty:
+                    pass
+
             try:
                 result = await asyncio.to_thread(self.sentiment_analysis, [text])
                 logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
@@ -276,6 +298,12 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
                         
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
+            
+            # Uncomment to check getChatSuggestion:
+            # if self.chat_queue.qsize() == 3:
+            #     logger.info(f'trigger suggestion')
+            #     suggestions = await asyncio.to_thread(self.getChatSuggestion)
+            #     logger.info(f'suggestions: {suggestions}')
 
 # Create handler and stream instances
 handler = GeminiHandler()

@@ -21,6 +21,11 @@ import numpy as np
 import time
 import base64
 import asyncio
+import json
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from threading import Thread
 
 logger = getLogger("main")
 
@@ -207,25 +212,226 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         t0 = time.time()
         try:
             text = await asyncio.to_thread(self.stt_model.stt, (fs, utter_1xN))
+            logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
+            
+            # Send transcription data to web interface via HTTP API
+            if text and len(text.strip()) > 0:
+                transcript_data = {
+                    "text": text.strip(),
+                    "confidence": 0.95,  # Placeholder confidence score
+                    "timestamp": time.time()
+                }
+                
+                # Send to web server API
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            "http://localhost:8000/api/transcription",
+                            json=transcript_data
+                        ) as response:
+                            if response.status == 200:
+                                logger.info(f"Transcription data sent to web server: {text[:50]}...")
+                            else:
+                                logger.warning(f"Failed to send transcription data: {response.status}")
+                except Exception as e:
+                    logger.error(f"Failed to send transcription data to web server: {e}")
+                    
         except Exception as e:
             logger.error(f'[STT error: {e}]')
-        logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
         
         if len(text.split()) > 3:
             t0 = time.time()
             try:
                 result = await asyncio.to_thread(self.sentiment_analysis, [text])
+                logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
+                
+                # Send sentiment analysis results to web interface via HTTP API
+                if result and len(result) > 0:
+                    sentiment_data = {
+                        "label": result[0]["label"],
+                        "score": result[0]["score"],
+                        "confidence": result[0]["score"],
+                        "timestamp": time.time()
+                    }
+                    
+                    # Send to web server API
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                "http://localhost:8000/api/sentiment",
+                                json=sentiment_data
+                            ) as response:
+                                if response.status == 200:
+                                    logger.info(f"Sentiment data sent to web server: {sentiment_data}")
+                                else:
+                                    logger.warning(f"Failed to send sentiment data: {response.status}")
+                    except Exception as e:
+                        logger.error(f"Failed to send sentiment data to web server: {e}")
+                        
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
-            logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
 
 
-handler = GeminiHandler()
+# WebSocket connection manager
+class WebSocketManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.handlers: dict[str, GeminiHandler] = {}
 
-stream = Stream(
-    handler=handler,
-    modality="audio-video",
-    mode="send-receive",
+    async def connect(self, websocket: WebSocket, session_id: str):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        
+        # Create a new handler for this session
+        handler = GeminiHandler()
+        self.handlers[session_id] = handler
+        
+        logger.info(f"WebSocket client connected: {session_id}")
+        await websocket.send_text(json.dumps({
+            "type": "connection",
+            "status": "connected",
+            "session_id": session_id
+        }))
+
+    def disconnect(self, websocket: WebSocket, session_id: str):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        
+        if session_id in self.handlers:
+            del self.handlers[session_id]
+        
+        logger.info(f"WebSocket client disconnected: {session_id}")
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                # Remove dead connections
+                self.active_connections.remove(connection)
+
+# Create FastAPI app for WebSocket support
+app = FastAPI(title="PeaceMaker with WebSocket")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-stream.ui.launch()
+manager = WebSocketManager()
+
+# WebSocket endpoint
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    await manager.connect(websocket, session_id)
+    
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            logger.info(f"WebSocket received from {session_id}: {message}")
+            
+            # Handle different message types
+            if message["type"] == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+            
+            elif message["type"] == "get_status":
+                await manager.send_personal_message(
+                    json.dumps({
+                        "type": "status",
+                        "connected": True,
+                        "session_id": session_id
+                    }),
+                    websocket
+                )
+            
+            elif message["type"] == "control":
+                control_data = message.get("data", {})
+                command = control_data.get("command")
+                
+                logger.info(f"WebSocket control command from {session_id}: {command}")
+                
+                if command == "start_recording":
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "control_response",
+                            "command": command,
+                            "status": "success",
+                            "message": "Recording started"
+                        }),
+                        websocket
+                    )
+                
+                elif command == "stop_recording":
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "control_response",
+                            "command": command,
+                            "status": "success",
+                            "message": "Recording stopped"
+                        }),
+                        websocket
+                    )
+            
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, session_id)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        manager.disconnect(websocket, session_id)
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "PeaceMaker with WebSocket"}
+
+def run_websocket_server():
+    """Run the WebSocket server in a separate thread"""
+    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+
+# Only start WebSocket server when this file is run directly
+if __name__ == "__main__":
+    # Start WebSocket server in background thread
+    websocket_thread = Thread(target=run_websocket_server, daemon=True)
+    websocket_thread.start()
+
+    handler = GeminiHandler()
+
+    stream = Stream(
+        handler=handler,
+        modality="audio-video",
+        mode="send-receive",
+    )
+else:
+    # When imported, just create the handler and stream without starting servers
+    handler = GeminiHandler()
+
+    stream = Stream(
+        handler=handler,
+        modality="audio-video",
+        mode="send-receive",
+    )
+
+# Only launch the Stream interface when this file is run directly
+if __name__ == "__main__":
+    # Launch the main Stream interface with proper iframe and CORS settings
+    stream.ui.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        share=False,
+        show_error=True,
+        quiet=False,
+        favicon_path=None,
+        # Enable iframe embedding
+        inbrowser=False,
+        # Allow all origins for iframe embedding
+        root_path=""
+    )

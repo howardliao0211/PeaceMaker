@@ -199,17 +199,66 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         t0 = time.time()
         try:
             text = await asyncio.to_thread(self.stt_model.stt, (fs, utter_1xN))
+            logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
+            
+            # Send transcription data to web interface via HTTP API
+            if text and len(text.strip()) > 0:
+                transcript_data = {
+                    "text": text.strip(),
+                    "confidence": 0.95,  # Placeholder confidence score
+                    "timestamp": time.time()
+                }
+                
+                # Send to web server API
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            "http://localhost:8000/api/transcription",
+                            json=transcript_data
+                        ) as response:
+                            if response.status == 200:
+                                logger.info(f"Transcription data sent to web server: {text[:50]}...")
+                            else:
+                                logger.warning(f"Failed to send transcription data: {response.status}")
+                except Exception as e:
+                    logger.error(f"Failed to send transcription data to web server: {e}")
+                    
         except Exception as e:
             logger.error(f'[STT error: {e}]')
-        logger.info(f"[STT] {time.time() - t0:.3f}s: {text}")
         
         if len(text.split()) > 3:
             t0 = time.time()
             try:
                 result = await asyncio.to_thread(self.sentiment_analysis, [text])
+                logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
+                
+                # Send sentiment analysis results to web interface via HTTP API
+                if result and len(result) > 0:
+                    sentiment_data = {
+                        "label": result[0]["label"],
+                        "score": result[0]["score"],
+                        "confidence": result[0]["score"],
+                        "timestamp": time.time()
+                    }
+                    
+                    # Send to web server API
+                    try:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(
+                                "http://localhost:8000/api/sentiment",
+                                json=sentiment_data
+                            ) as response:
+                                if response.status == 200:
+                                    logger.info(f"Sentiment data sent to web server: {sentiment_data}")
+                                else:
+                                    logger.warning(f"Failed to send sentiment data: {response.status}")
+                    except Exception as e:
+                        logger.error(f"Failed to send sentiment data to web server: {e}")
+                        
             except Exception as e:
                 logger.error(f'[SA error: {e}]')
-            logger.info(f"[SA] {time.time() - t0:.3f}s: {result}")
 
 
 # WebSocket connection manager
@@ -333,7 +382,7 @@ async def health_check():
 
 def run_websocket_server():
     """Run the WebSocket server in a separate thread"""
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
 
 # Only start WebSocket server when this file is run directly
 if __name__ == "__main__":
@@ -371,13 +420,5 @@ if __name__ == "__main__":
         # Enable iframe embedding
         inbrowser=False,
         # Allow all origins for iframe embedding
-        root_path="",
-        # Custom CSS to fix iframe issues
-        css="""
-        .gradio-container {
-            max-width: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        """
+        root_path=""
     )

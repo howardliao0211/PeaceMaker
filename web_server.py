@@ -7,6 +7,7 @@ Serves the web UI and integrates with the existing backend
 import os
 import asyncio
 import json
+import time
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -43,11 +44,17 @@ build_path = ui_path / "build"
 
 # Mount the React build directory as static files
 if build_path.exists():
-    # Mount static assets at root level for React app
-    app.mount("/", StaticFiles(directory=str(build_path), html=True), name="static")
+    # Mount static assets at /static path for React app
+    app.mount("/static", StaticFiles(directory=str(build_path)), name="static")
     logger.info(f"Mounted React build directory: {build_path}")
 else:
     logger.warning(f"React build directory not found: {build_path}")
+    
+    # For development, serve the public directory
+    public_path = ui_path / "public"
+    if public_path.exists():
+        app.mount("/static", StaticFiles(directory=str(public_path)), name="static")
+        logger.info(f"Mounted UI public directory: {public_path}")
 
 # WebSocket connections
 class ConnectionManager:
@@ -63,7 +70,9 @@ class ConnectionManager:
         handler = GeminiHandler()
         self.handlers[session_id] = handler
         
-        logger.info(f"Client connected: {session_id}")
+        logger.info(f"🔌 WebSocket client connected: {session_id}")
+        logger.info(f"📊 Total active connections: {len(self.active_connections)}")
+        
         await websocket.send_text(json.dumps({
             "type": "connection",
             "status": "connected",
@@ -83,10 +92,13 @@ class ConnectionManager:
         await websocket.send_text(message)
 
     async def broadcast(self, message: str):
+        logger.info(f"📡 Broadcasting message to {len(self.active_connections)} connections")
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-            except:
+                logger.info(f"✅ Message sent to connection")
+            except Exception as e:
+                logger.error(f"❌ Failed to send message: {e}")
                 # Remove dead connections
                 self.active_connections.remove(connection)
 
@@ -96,13 +108,13 @@ manager = ConnectionManager()
 class TranscriptionData(BaseModel):
     text: str
     confidence: float
-    timestamp: str
+    timestamp: float  # Changed from str to float to match main.py
 
 class SentimentData(BaseModel):
     label: str
     score: float
     confidence: float
-    timestamp: str
+    timestamp: float  # Changed from str to float to match main.py
 
 class AudioSettings(BaseModel):
     sample_rate: int = 24000
@@ -148,10 +160,17 @@ async def add_transcription(data: TranscriptionData):
     """Add transcription data"""
     logger.info(f"Transcription received: {data.text}")
     
+    # Convert timestamp to readable format for frontend
+    frontend_data = {
+        "text": data.text,
+        "confidence": data.confidence,
+        "timestamp": time.strftime("%H:%M:%S", time.localtime(data.timestamp))
+    }
+    
     # Broadcast to all connected clients
     await manager.broadcast(json.dumps({
         "type": "transcription",
-        "data": data.dict()
+        "data": frontend_data
     }))
     
     return {"status": "success"}
@@ -161,10 +180,18 @@ async def add_sentiment(data: SentimentData):
     """Add sentiment analysis data"""
     logger.info(f"Sentiment received: {data.label} ({data.score})")
     
+    # Convert timestamp to readable format for frontend
+    frontend_data = {
+        "label": data.label,
+        "score": data.score,
+        "confidence": data.confidence,
+        "timestamp": time.strftime("%H:%M:%S", time.localtime(data.timestamp))
+    }
+    
     # Broadcast to all connected clients
     await manager.broadcast(json.dumps({
         "type": "sentiment",
-        "data": data.dict()
+        "data": frontend_data
     }))
     
     return {"status": "success"}
@@ -430,12 +457,20 @@ async def get_backend_status():
 # Error handlers
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
-    return {"error": "Not found", "path": str(request.url.path)}
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Not found", "path": str(request.url.path)}
+    )
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
+    from fastapi.responses import JSONResponse
     logger.error(f"Internal server error: {exc}")
-    return {"error": "Internal server error"}
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"}
+    )
 
 # Main function
 def main():
@@ -444,6 +479,7 @@ def main():
     host = os.getenv("HOST", "0.0.0.0")
     
     logger.info(f"Starting PeaceMaker Web Server on {host}:{port}")
+    logger.info("Make sure to also run 'python main.py' in another terminal for the Gradio interface")
     
     uvicorn.run(
         "web_server:app",

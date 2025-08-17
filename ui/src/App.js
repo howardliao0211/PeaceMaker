@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 function App() {
   // Basic state for functionality
@@ -6,6 +6,15 @@ function App() {
   const [isVideoOn, setIsVideoOn] = useState(false);
   const [gradioLoaded, setGradioLoaded] = useState(false);
   const [gradioError, setGradioError] = useState(null);
+
+  // New state for sentiment analysis and transcript
+  const [sentimentResults, setSentimentResults] = useState([]);
+  const [transcripts, setTranscripts] = useState([]);
+  const [websocketConnected, setWebsocketConnected] = useState(false);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  
+  // WebSocket reference
+  const websocketRef = useRef(null);
 
   useEffect(() => {
     // Check backend connection periodically
@@ -27,9 +36,180 @@ function App() {
     };
   }, [gradioLoaded]);
 
+  // WebSocket connection for real-time sentiment analysis
+  useEffect(() => {
+    if (gradioLoaded && !websocketConnected && !websocketRef.current) {
+      connectWebSocket();
+    }
+
+    return () => {
+      if (websocketRef.current) {
+        websocketRef.current.close();
+        websocketRef.current = null;
+      }
+    };
+  }, [gradioLoaded]); // Removed websocketConnected from dependencies
+
+  // Auto-reconnect if connection is lost
+  useEffect(() => {
+    if (gradioLoaded && !websocketConnected && !websocketRef.current) {
+      const reconnectTimer = setTimeout(() => {
+        console.log('🔄 Attempting to reconnect WebSocket...');
+        connectWebSocket();
+      }, 2000); // Wait 2 seconds before reconnecting
+
+      return () => clearTimeout(reconnectTimer);
+    }
+  }, [gradioLoaded, websocketConnected]);
+
+  // Listen for messages from Gradio iframe
+  useEffect(() => {
+    const handleMessage = (event) => {
+      // Only accept messages from our own origin or from localhost
+      if (event.origin !== window.location.origin && 
+          !event.origin.includes('localhost') && 
+          !event.origin.includes('127.0.0.1')) {
+        return;
+      }
+      
+      try {
+        const data = event.data;
+        console.log('📨 Message from Gradio iframe:', data);
+        
+        if (data.type === 'transcription') {
+          // Handle transcription from Gradio
+          setTranscripts(prev => [...prev, {
+            text: data.text,
+            confidence: data.confidence || 0.8,
+            id: Date.now(),
+            timestamp: new Date().toLocaleTimeString()
+          }]);
+        } else if (data.type === 'sentiment') {
+          // Handle sentiment from Gradio
+          setSentimentResults(prev => [...prev, {
+            label: data.label,
+            score: data.score || 0.5,
+            confidence: data.confidence || 0.8,
+            id: Date.now(),
+            timestamp: new Date().toLocaleTimeString()
+          }]);
+        } else if (data.type === 'recording_status') {
+          // Handle recording status from Gradio
+          if (data.status === 'started') {
+            setIsRecording(true);
+          } else if (data.status === 'stopped') {
+            setIsRecording(false);
+          }
+        }
+      } catch (error) {
+        console.error('Error handling message from Gradio:', error);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const connectWebSocket = () => {
+    // Prevent multiple connections
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+      console.log('🔌 WebSocket already connected, skipping...');
+      return;
+    }
+    
+    try {
+      const sessionId = `session_${Date.now()}`;
+      setCurrentSessionId(sessionId);
+      
+      console.log('🔌 Attempting WebSocket connection...');
+      const ws = new WebSocket(`ws://localhost:8000/ws/${sessionId}`);
+      websocketRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('🔌 WebSocket connected successfully');
+        setWebsocketConnected(true);
+        
+        // Send initial status request
+        ws.send(JSON.stringify({
+          type: 'get_status'
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          handleWebSocketMessage(message);
+        } catch (error) {
+          console.error('Error parsing WebSocket message:', error);
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('🔌 WebSocket disconnected');
+        setWebsocketConnected(false);
+        websocketRef.current = null;
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setWebsocketConnected(false);
+        websocketRef.current = null;
+      };
+    } catch (error) {
+      console.error('Failed to connect WebSocket:', error);
+    }
+  };
+
+  const handleWebSocketMessage = (message) => {
+    switch (message.type) {
+      case 'sentiment':
+        // Handle sentiment analysis results from backend
+        const sentimentData = message.data;
+        setSentimentResults(prev => [...prev, {
+          ...sentimentData,
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString()
+        }]);
+        console.log('📊 Sentiment analysis received:', sentimentData);
+        break;
+        
+      case 'transcription':
+        // Handle transcription data from backend
+        const transcriptData = message.data;
+        setTranscripts(prev => [...prev, {
+          ...transcriptData,
+          id: Date.now(),
+          timestamp: new Date().toLocaleTimeString()
+        }]);
+        console.log('📝 Transcription received:', transcriptData);
+        break;
+        
+      case 'connection':
+        console.log('🔌 WebSocket connection established:', message.session_id);
+        break;
+        
+      case 'status':
+        console.log('📊 Status received:', message);
+        break;
+        
+      default:
+        console.log('📨 WebSocket message received:', message);
+    }
+  };
+
+  const sendWebSocketMessage = (type, data = {}) => {
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+      websocketRef.current.send(JSON.stringify({
+        type,
+        data,
+        session_id: currentSessionId
+      }));
+    }
+  };
+
   const testBackendConnection = async () => {
     try {
-      const wsResponse = await fetch('http://localhost:8000/health');
+      const wsResponse = await fetch('http://localhost:8000/api/health');
       const gradioResponse = await fetch('http://localhost:7860');
       
       if (wsResponse.ok && gradioResponse.ok) {
@@ -60,14 +240,60 @@ function App() {
     }
     
     console.log('🎙️ Starting recording...');
-    setIsRecording(true);
-    console.log('✅ Recording started successfully');
+    
+    try {
+      // Send WebSocket message to start recording
+      sendWebSocketMessage('control', { command: 'start_recording' });
+      
+      // Also try to communicate with Gradio iframe
+      const gradioFrame = document.querySelector('iframe[src="/gradio-embed.html"]');
+      if (gradioFrame && gradioFrame.contentWindow) {
+        try {
+          // Try to post message to Gradio iframe
+          gradioFrame.contentWindow.postMessage({
+            type: 'start_recording',
+            timestamp: Date.now()
+          }, '*');
+        } catch (error) {
+          console.log('Could not communicate with Gradio iframe:', error);
+        }
+      }
+      
+      setIsRecording(true);
+      console.log('✅ Recording started successfully');
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+      alert('Failed to start recording. Please check the console for details.');
+    }
   };
 
   const stopRecording = async () => {
     console.log('🛑 Stopping recording...');
-    setIsRecording(false);
-    console.log('✅ Recording stopped successfully');
+    
+    try {
+      // Send WebSocket message to stop recording
+      sendWebSocketMessage('control', { command: 'stop_recording' });
+      
+      // Also try to communicate with Gradio iframe
+      const gradioFrame = document.querySelector('iframe[src="/gradio-embed.html"]');
+      if (gradioFrame && gradioFrame.contentWindow) {
+        try {
+          // Try to post message to Gradio iframe
+          gradioFrame.contentWindow.postMessage({
+            type: 'stop_recording',
+            timestamp: Date.now()
+          }, '*');
+        } catch (error) {
+          console.log('Could not communicate with Gradio iframe:', error);
+        }
+      }
+      
+      setIsRecording(false);
+      console.log('✅ Recording stopped successfully');
+    } catch (error) {
+      console.error('Failed to stop recording:', error);
+      alert('Failed to stop recording. Please check the console for details.');
+    }
   };
 
   const toggleVideo = async () => {
@@ -256,24 +482,100 @@ function App() {
               <span>AI Interface: {gradioLoaded ? 'Online' : 'Offline'}</span>
             </div>
             <div className="status-indicator">
+              <span className={`status-dot ${websocketConnected ? 'online' : 'offline'}`}></span>
+              <span>WebSocket: {websocketConnected ? 'Connected' : 'Disconnected'}</span>
+            </div>
+            <div className="status-indicator">
               <span className={`status-dot ${isRecording ? 'online' : 'offline'}`}></span>
               <span>Recording: {isRecording ? 'Active' : 'Inactive'}</span>
             </div>
+            {currentSessionId && (
+              <div className="session-info">
+                <small>Session: {currentSessionId}</small>
+              </div>
+            )}
           </div>
 
           {/* Sentiment Analysis */}
           <div className="sentiment-card">
             <h3>Sentiment Analysis</h3>
             <div className="sentiment-display">
-              <div className="sentiment-placeholder">
-                <i className="fas fa-chart-line"></i>
-                <p>
-                  {gradioLoaded 
-                    ? "Sentiment analysis available in AI interface above"
-                    : "Loading sentiment analysis..."
-                  }
-                </p>
-              </div>
+              {websocketConnected ? (
+                <div className="sentiment-results">
+                  {sentimentResults.length > 0 ? (
+                    sentimentResults.map((result, index) => (
+                      <div key={result.id} className={`sentiment-item ${result.label.toLowerCase()}`}>
+                        <div className="sentiment-label">
+                          <span className={`label-badge ${result.label.toLowerCase()}`}>
+                            {result.label}
+                          </span>
+                          <span className="confidence">
+                            {(result.confidence * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="sentiment-score">
+                          Score: {result.score.toFixed(3)}
+                        </div>
+                        <div className="sentiment-timestamp">
+                          {result.timestamp}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="sentiment-placeholder">
+                      <i className="fas fa-chart-line"></i>
+                      <p>Waiting for sentiment analysis results...</p>
+                      <small>Start recording to see real-time sentiment analysis</small>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="sentiment-placeholder">
+                  <i className="fas fa-wifi"></i>
+                  <p>Connecting to sentiment analysis service...</p>
+                  <small>WebSocket connection required</small>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Transcript Display */}
+          <div className="transcript-card">
+            <h3>Live Transcript</h3>
+            <div className="transcript-display">
+              {websocketConnected ? (
+                <div className="transcript-results">
+                  {transcripts.length > 0 ? (
+                    transcripts.map((transcript, index) => (
+                      <div key={transcript.id} className="transcript-item">
+                        <div className="transcript-text">
+                          {transcript.text}
+                        </div>
+                        <div className="transcript-meta">
+                          <span className="confidence">
+                            Confidence: {(transcript.confidence * 100).toFixed(1)}%
+                          </span>
+                          <span className="timestamp">
+                            {transcript.timestamp}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="transcript-placeholder">
+                      <i className="fas fa-microphone"></i>
+                      <p>Waiting for transcript...</p>
+                      <small>Start recording to see live transcription</small>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="transcript-placeholder">
+                  <i className="fas fa-wifi"></i>
+                  <p>Connecting to transcription service...</p>
+                  <small>WebSocket connection required</small>
+                </div>
+              )}
             </div>
           </div>
         </div>

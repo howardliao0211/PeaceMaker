@@ -7,13 +7,13 @@ function App() {
   const [gradioLoaded, setGradioLoaded] = useState(false);
   const [gradioError, setGradioError] = useState(null);
 
-  // New state for sentiment analysis and transcript
+  // State for sentiment analysis and transcript
   const [sentimentResults, setSentimentResults] = useState([]);
   const [transcripts, setTranscripts] = useState([]);
   const [websocketConnected, setWebsocketConnected] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   
-  // New state for mute functionality and topic suggestions
+  // State for mute functionality and topic suggestions
   const [isMuted, setIsMuted] = useState(false);
   const [topicSuggestions, setTopicSuggestions] = useState([]);
   
@@ -40,7 +40,7 @@ function App() {
     };
   }, [gradioLoaded]);
 
-  // WebSocket connection for real-time sentiment analysis
+  // WebSocket connection for real-time features
   useEffect(() => {
     if (gradioLoaded && !websocketConnected && !websocketRef.current) {
       connectWebSocket();
@@ -52,7 +52,7 @@ function App() {
         websocketRef.current = null;
       }
     };
-  }, [gradioLoaded]); // Removed websocketConnected from dependencies
+  }, [gradioLoaded]);
 
   // Auto-reconnect if connection is lost
   useEffect(() => {
@@ -60,62 +60,13 @@ function App() {
       const reconnectTimer = setTimeout(() => {
         console.log('🔄 Attempting to reconnect WebSocket...');
         connectWebSocket();
-      }, 2000); // Wait 2 seconds before reconnecting
+      }, 2000);
 
       return () => clearTimeout(reconnectTimer);
     }
   }, [gradioLoaded, websocketConnected]);
 
-  // Listen for messages from Gradio iframe
-  useEffect(() => {
-    const handleMessage = (event) => {
-      // Only accept messages from our own origin or from localhost
-      if (event.origin !== window.location.origin && 
-          !event.origin.includes('localhost') && 
-          !event.origin.includes('127.0.0.1')) {
-        return;
-      }
-      
-      try {
-        const data = event.data;
-        console.log('📨 Message from Gradio iframe:', data);
-        
-        if (data.type === 'transcription') {
-          // Handle transcription from Gradio
-          setTranscripts(prev => [...prev, {
-            text: data.text,
-            confidence: data.confidence || 0.8,
-            id: Date.now(),
-            timestamp: new Date().toLocaleTimeString()
-          }]);
-        } else if (data.type === 'sentiment') {
-          // Handle sentiment from Gradio
-          setSentimentResults(prev => [...prev, {
-            label: data.label,
-            score: data.score || 0.5,
-            confidence: data.confidence || 0.8,
-            id: Date.now(),
-            timestamp: new Date().toLocaleTimeString()
-          }]);
-        } else if (data.type === 'recording_status') {
-          // Handle recording status from Gradio
-          if (data.status === 'started') {
-            setIsRecording(true);
-          } else if (data.status === 'stopped') {
-            setIsRecording(false);
-          }
-        }
-      } catch (error) {
-        console.error('Error handling message from Gradio:', error);
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
   const connectWebSocket = () => {
-    // Prevent multiple connections
     if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
       console.log('🔌 WebSocket already connected, skipping...');
       return;
@@ -133,7 +84,6 @@ function App() {
         console.log('🔌 WebSocket connected successfully');
         setWebsocketConnected(true);
         
-        // Send initial status request
         ws.send(JSON.stringify({
           type: 'get_status'
         }));
@@ -167,7 +117,6 @@ function App() {
   const handleWebSocketMessage = (message) => {
     switch (message.type) {
       case 'sentiment':
-        // Handle sentiment analysis results from backend
         const sentimentData = message.data;
         setSentimentResults(prev => [...prev, {
           ...sentimentData,
@@ -178,7 +127,6 @@ function App() {
         break;
         
       case 'transcription':
-        // Handle transcription data from backend
         const transcriptData = message.data;
         setTranscripts(prev => [...prev, {
           ...transcriptData,
@@ -197,7 +145,6 @@ function App() {
         break;
         
       case 'topic_suggestions':
-        // Handle topic suggestions from backend
         if (message.data && Array.isArray(message.data)) {
           setTopicSuggestions(message.data);
         }
@@ -205,23 +152,19 @@ function App() {
         break;
         
       case 'mute_response':
-        // Handle mute response from backend
         if (message.status === 'success') {
           console.log('🔇 Mute response:', message.message);
         } else {
           console.error('❌ Mute failed:', message.message);
-          // Revert the mute state if it failed
           setIsMuted(false);
         }
         break;
         
       case 'unmute_response':
-        // Handle unmute response from backend
         if (message.status === 'success') {
           console.log('🔊 Unmute response:', message.message);
         } else {
           console.error('❌ Unmute failed:', message.message);
-          // Revert the unmute state if it failed
           setIsMuted(true);
         }
         break;
@@ -262,12 +205,10 @@ function App() {
   const toggleMute = async () => {
     try {
       if (isMuted) {
-        // Call unmute function
         sendWebSocketMessage('unmute');
         setIsMuted(false);
         console.log('🔊 Unmuted');
       } else {
-        // Call mute function
         sendWebSocketMessage('mute');
         setIsMuted(true);
         console.log('🔇 Muted');
@@ -304,7 +245,7 @@ function App() {
         </div>
       </header>
 
-      {/* Main Content - Window-based Layout */}
+      {/* Main Content */}
       <main className="main-content">
         {/* AI Interface Window */}
         <div className="ai-window">
@@ -358,20 +299,17 @@ function App() {
               </div>
             </div>
             
-            {/* Live Transcript at Bottom */}
+            {/* Live Transcript */}
             <div className="transcript-section">
               <div className="transcript-header">
                 <h3>Live Transcript</h3>
-                <button className="expand-btn" title="Expand/Collapse">
-                  <i className="fas fa-chevron-down"></i>
-                </button>
               </div>
               <div className="transcript-content">
                 {websocketConnected ? (
                   <div className="transcript-results">
                     {transcripts.length > 0 ? (
                       <div className="transcript-list">
-                        {transcripts.slice().reverse().map((transcript, index) => (
+                        {transcripts.slice().reverse().map((transcript) => (
                           <div key={transcript.id} className="transcript-item">
                             <div className="transcript-text">
                               {transcript.text}
@@ -469,7 +407,7 @@ function App() {
               {websocketConnected ? (
                 <div className="sentiment-results">
                   {sentimentResults.length > 0 ? (
-                    sentimentResults.map((result, index) => (
+                    sentimentResults.map((result) => (
                       <div key={result.id} className={`sentiment-item ${result.label.toLowerCase()}`}>
                         <div className="sentiment-label">
                           <span className={`label-badge ${result.label.toLowerCase()}`}>
@@ -511,8 +449,6 @@ function App() {
       <footer className="footer">
         <div className="footer-content">
           <div className="connection-info">
-            <span>00:00:00</span>
-            <span>0 KB</span>
             <span className={`status-indicator ${gradioLoaded ? 'online' : 'offline'}`}>
               AI: {gradioLoaded ? 'Ready' : 'Loading...'}
             </span>

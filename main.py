@@ -36,7 +36,7 @@ class VadConfig:
     # If voiced duration in a buffer exceeds this, mark "started_talking"
     started_talking_threshold: float = 0.20 # seconds
     # If voiced duration in a buffer falls below this (after talking started), treat as pause
-    speech_threshold: float = 0.1          # seconds
+    speech_threshold: float = 0.5          # seconds
     # Cut long monologues
     max_continuous_speech_s: float = 12.0
     # If a new utterance starts while STT is running, interrupt the old one
@@ -79,9 +79,9 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
 
     def getChatSuggestion(self) -> list[str]:
         return [
-            'break up',
-            'go home',
-            'I wanna sleep'
+            'about her feelings',
+            'about the friend',
+            'about the party'
         ]
 
     def copy(self) -> "GeminiHandler":

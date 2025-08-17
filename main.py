@@ -66,6 +66,19 @@ class GeminiHandler(AsyncAudioVideoStreamHandler):
         # pipeline for sentiment analysis
         self.sentiment_analysis = pipeline("text-classification")
 
+    def mute(self) -> None:
+        pass
+
+    def unmute(self) -> None:
+        pass
+
+    def getChatSuggestion(self) -> list[str]:
+        return [
+            'break up',
+            'go home',
+            'I wanna sleep'
+        ]
+
     def copy(self) -> "GeminiHandler":
         return GeminiHandler()
 
